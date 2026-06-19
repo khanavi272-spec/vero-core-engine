@@ -12,7 +12,8 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { Keypair } from "@stellar/stellar-sdk";
 import type { EventPropagator, EngineEvent } from "./event-propagator";
-import { WalletConnector } from "./wallet-connector";
+import { RelayerAuth } from "./relayer-auth";
+import type { RelayerAuthOptions } from "./relayer-auth";
 
 export interface ZkStateSnapshot {
   type:       "zk_state_update";
@@ -34,13 +35,8 @@ export interface ZkStateSyncerOptions {
   zkTopic?:        string;
   /** Interval between keep-alive pings in ms.  Defaults to 30 000. */
   pingIntervalMs?: number;
-
-  /** SEP-10 Auth: Server's secret key for signing challenges. */
-  serverSigningKey?: string;
-  /** SEP-10 Auth: Network passphrase (e.g. Test SDF Network ; September 2015). */
-  networkPassphrase?: string;
-  /** SEP-10 Auth: Domain name for the challenge. */
-  domain?: string;
+  /** Optional relayer authentication config. */
+  auth?:           RelayerAuthOptions;
 }
 
 const DEFAULT_ZK_TOPIC     = "state_commitment";
@@ -62,8 +58,12 @@ export class ZkStateSyncer {
   ) {
     this.options = options;
     this.zkTopic = options.zkTopic ?? DEFAULT_ZK_TOPIC;
-    this.wss     = new WebSocketServer({ port: options.port });
-    this.ready   = new Promise(resolve => this.wss.once("listening", resolve));
+
+    this.wss = new WebSocketServer({
+      port: options.port,
+      ...(options.auth && { verifyClient: (info, cb) => new RelayerAuth(options.auth!).verifyClient(info, cb) }),
+    });
+    this.ready = new Promise(resolve => this.wss.once("listening", resolve));
 
     this.wss.on("connection", (ws: WebSocket) => {
       this.clients.set(ws, {});
