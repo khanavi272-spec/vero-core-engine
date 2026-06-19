@@ -4,7 +4,7 @@
 //! Off-chain provers submit `StateCommitment`s; this module verifies ordering
 //! and hash integrity before they are persisted.
 
-use soroban_sdk::{contracttype, panic_with_error, symbol_short, Env, Symbol};
+use soroban_sdk::{contracterror, panic_with_error, symbol_short, Env, Symbol};
 use sha2::{Digest, Sha256};
 
 use crate::types::StateCommitment;
@@ -12,8 +12,9 @@ use crate::types::StateCommitment;
 const KEY_SEQ:  Symbol = symbol_short!("SEQ");
 const KEY_PREV: Symbol = symbol_short!("PREV_H");
 
-#[contracttype]
-#[derive(Copy, Clone)]
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
 pub enum AuditError {
     ReplayedSequence  = 1,
     HashMismatch      = 2,
@@ -66,6 +67,12 @@ mod tests {
     use super::*;
     use soroban_sdk::{testutils::Address as _, Address, BytesN, Env};
 
+    #[soroban_sdk::contract]
+    pub struct TestContract;
+
+    #[soroban_sdk::contractimpl]
+    impl TestContract {}
+
     #[test]
     fn valid_first_commitment() {
         let env = Env::default();
@@ -78,7 +85,10 @@ mod tests {
             ledger:     100,
             author:     Address::generate(&env),
         };
-        validate_transition(&env, &c, payload); // must not panic
+        let contract_id = env.register_contract(None, TestContract);
+        env.as_contract(&contract_id, || {
+            validate_transition(&env, &c, payload); // must not panic
+        });
     }
 
     #[test]
@@ -93,7 +103,10 @@ mod tests {
             ledger:     100,
             author:     Address::generate(&env),
         };
-        validate_transition(&env, &c, payload);
-        validate_transition(&env, &c, payload); // second call must panic
+        let contract_id = env.register_contract(None, TestContract);
+        env.as_contract(&contract_id, || {
+            validate_transition(&env, &c, payload);
+            validate_transition(&env, &c, payload); // second call must panic
+        });
     }
 }

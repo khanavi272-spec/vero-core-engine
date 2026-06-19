@@ -5,38 +5,59 @@
 //! full approval and execution, giving stakeholders a veto window.
 //!
 //! ## Proposal State Machine
-//! ```
-//! Pending ─ (on approve, threshold met) → Approved ─ (on execute, timelock elapsed) → Executed
+//! ```text
+//! Pending -- (on approve, threshold met) -> Approved -- (on execute, timelock elapsed) -> Executed
 //! ```
 //! Invalid transitions trigger contract panics.
 
 use soroban_sdk::{
-    contracttype, panic_with_error, symbol_short, vec, Address, Env, Map, Symbol, Vec,
+    contracterror, panic_with_error, symbol_short, vec, Address, Env, Map, Symbol, Vec,
 };
 
 use crate::types::{Proposal, ProposalState};
 
 const KEY_PROPOSALS: Symbol = symbol_short!("PROPS");
 const KEY_SIGNERS:   Symbol = symbol_short!("SIGNERS");
+const KEY_WEIGHTS:   Symbol = symbol_short!("WEIGHTS");
 const KEY_THRESH:    Symbol = symbol_short!("THRESH");
 /// Ledgers to wait after full approval before execution (~1 hour on Stellar).
 const TIMELOCK_LEDGERS: u32 = 720;
+const SCALING_FACTOR: u64 = 10_000;
 
-#[contracttype]
-#[derive(Copy, Clone)]
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
 pub enum GovError {
-    NotASigner         = 1,
-    AlreadyApproved    = 2,
-    ThresholdNotMet    = 3,
-    TimelockActive     = 4,
+    NotASigner             = 1,
+    AlreadyApproved        = 2,
+    ThresholdNotMet        = 3,
+    TimelockActive         = 4,
     InvalidStateTransition = 5,
-    ProposalNotFound   = 6,
+    ProposalNotFound       = 6,
+    WeightsLengthMismatch  = 7,
+    InvalidThreshold       = 8,
+    InvalidWeight          = 9,
 }
 
-/// Initialise governance with an ordered signer set and approval threshold.
-pub fn init(env: &Env, signers: Vec<Address>, threshold: u32) {
-    assert!(threshold as usize <= signers.len(), "threshold > signer count");
+/// Initialise governance with an ordered signer set, corresponding weights, and approval threshold.
+pub fn init(env: &Env, signers: Vec<Address>, weights: Vec<u32>, threshold: u32) {
+    if signers.len() != weights.len() {
+        panic_with_error!(env, GovError::WeightsLengthMismatch);
+    }
+    if signers.len() == 0 {
+        panic_with_error!(env, GovError::WeightsLengthMismatch);
+    }
+    if threshold == 0 || threshold > (SCALING_FACTOR as u32) {
+        panic_with_error!(env, GovError::InvalidThreshold);
+    }
+    for i in 0..weights.len() {
+        let w = weights.get(i).unwrap();
+        if w == 0 {
+            panic_with_error!(env, GovError::InvalidWeight);
+        }
+    }
     env.storage().instance().set(&KEY_SIGNERS, &signers);
+    env.storage().instance().set(&KEY_WEIGHTS, &weights);
     env.storage().instance().set(&KEY_THRESH, &threshold);
     let empty: Map<u64, (Proposal, u32)> = Map::new(env);
     env.storage().instance().set(&KEY_PROPOSALS, &empty);
@@ -74,7 +95,8 @@ pub fn approve(env: &Env, signer: &Address, proposal_id: u64) {
     if !signers.contains(signer) {
         panic_with_error!(env, GovError::NotASigner);
     }
-    let threshold: u32 = env.storage().instance().get(&KEY_THRESH).unwrap_or(1);
+    let weights: Vec<u32> = env.storage().instance().get(&KEY_WEIGHTS).unwrap_or(vec![env]);
+    let threshold: u32 = env.storage().instance().get(&KEY_THRESH).unwrap_or(10_000);
 
     let mut props = load_proposals(env);
     let (mut prop, unlock) = props.get(proposal_id).unwrap_or_else(|| {
@@ -91,8 +113,35 @@ pub fn approve(env: &Env, signer: &Address, proposal_id: u64) {
     }
     prop.approved_by.push_back(signer.clone());
     
+    // Calculate total weight and approved weight
+    let mut total_weight: u64 = 0;
+    for i in 0..weights.len() {
+        let w = weights.get(i).unwrap();
+        total_weight = total_weight.checked_add(w as u64).unwrap_or_else(|| panic!("Total weight overflow"));
+    }
+
+    let mut approved_weight: u64 = 0;
+    for i in 0..signers.len() {
+        let s = signers.get(i).unwrap();
+        if prop.approved_by.contains(&s) {
+            let w = weights.get(i).unwrap();
+            approved_weight = approved_weight.checked_add(w as u64).unwrap_or_else(|| panic!("Approved weight overflow"));
+        }
+    }
+
+    // Perform strict fixed-point quorum verification
+    // approved_weight / total_weight >= threshold / SCALING_FACTOR
+    // => approved_weight * SCALING_FACTOR >= threshold * total_weight
+    let approved_weight_scaled = approved_weight
+        .checked_mul(SCALING_FACTOR)
+        .unwrap_or_else(|| panic!("Approved weight multiplication overflow"));
+    
+    let required_weight = (threshold as u64)
+        .checked_mul(total_weight)
+        .unwrap_or_else(|| panic!("Required weight multiplication overflow"));
+
     // Transition to Approved when threshold is met
-    if (prop.approved_by.len() as u32) >= threshold {
+    if approved_weight_scaled >= required_weight {
         prop.state = ProposalState::Approved;
         env.events().publish(
             (symbol_short!("GOV"), symbol_short!("approved")),
