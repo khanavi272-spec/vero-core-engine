@@ -127,8 +127,16 @@ pub fn approve(env: &Env, signer: &Address, proposal_id: u64) {
         );
     }
     
-    props.set(proposal_id, (prop, unlock));
+    props.set(proposal_id, (prop.clone(), unlock));
     env.storage().instance().set(&KEY_PROPOSALS, &props);
+
+    // Auto-execute hook: if the proposal just reached Approved state and the
+    // timelock has already elapsed, execute immediately to avoid manual step.
+    if prop.state == ProposalState::Approved && env.ledger().sequence() >= unlock {
+        // Best-effort: calling `execute` will update storage and emit execute event.
+        // Any failure will panic as per existing execute guards.
+        let _ = execute(env, proposal_id);
+    }
 }
 
 /// Execute a proposal after threshold approvals and time-lock expiry.

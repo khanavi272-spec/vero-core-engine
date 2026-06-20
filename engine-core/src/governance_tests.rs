@@ -93,6 +93,33 @@ mod tests {
     }
 
     #[test]
+    fn test_auto_execute_on_approve_after_timelock() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let s1 = Address::generate(&env);
+        let (cid, _) = init_one(&env, &s1, 0);
+
+        env.as_contract(&cid, || {
+            let id = governance::propose(&env, make_proposal(&env, 2, &s1));
+            // Advance ledger past the unlock before approving so approve() should
+            // auto-execute when threshold is met.
+            env.ledger().with_mut(|l| l.sequence_number += 2000);
+            governance::approve(&env, &s1, id);
+
+            let state = env
+                .storage()
+                .instance()
+                .get::<_, soroban_sdk::Map<u64, (Proposal, u32)>>(&soroban_sdk::symbol_short!("PROPS"))
+                .unwrap()
+                .get(id)
+                .unwrap()
+                .0
+                .state;
+            assert_eq!(state, ProposalState::Executed);
+        });
+    }
+
+    #[test]
     fn test_approve_passes_with_sufficient_stake() {
         let env = Env::default();
         env.mock_all_auths();
