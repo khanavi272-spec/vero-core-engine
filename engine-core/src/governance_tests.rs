@@ -296,4 +296,114 @@ mod tests {
             governance::approve(&env, &outsider, id); // NotASigner = 1
         });
     }
+
+    // ── cancel / revert ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_cancel_pending_proposal() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let s1 = Address::generate(&env);
+        let (cid, _) = init_one(&env, &s1, 0);
+
+        env.as_contract(&cid, || {
+            let id = governance::propose(&env, make_proposal(&env, 1, &s1));
+            let prop = governance::cancel(&env, &s1, id);
+            assert_eq!(prop.state, ProposalState::Cancelled);
+
+            // The stored proposal is the cancelled (terminal) one.
+            let stored = env
+                .storage()
+                .instance()
+                .get::<_, soroban_sdk::Map<u64, (Proposal, u32)>>(
+                    &soroban_sdk::symbol_short!("PROPS"),
+                )
+                .unwrap()
+                .get(id)
+                .unwrap()
+                .0
+                .state;
+            assert_eq!(stored, ProposalState::Cancelled);
+        });
+    }
+
+    #[test]
+    fn test_cancel_before_threshold_by_other_signer() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let a = Address::generate(&env);
+        let b = Address::generate(&env);
+        let cid = init_two(&env, &a, &b); // threshold = 2
+
+        env.as_contract(&cid, || {
+            let id = governance::propose(&env, make_proposal(&env, 1, &a));
+            governance::approve(&env, &a, id); // still Pending (1 of 2)
+            let prop = governance::cancel(&env, &b, id);
+            assert_eq!(prop.state, ProposalState::Cancelled);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #6)")]
+    fn test_cannot_cancel_executed_proposal() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let s1 = Address::generate(&env);
+        let (cid, _) = init_one(&env, &s1, 0);
+
+        env.as_contract(&cid, || {
+            let id = governance::propose(&env, make_proposal(&env, 1, &s1));
+            governance::approve(&env, &s1, id); // → Approved
+            env.ledger().with_mut(|l| l.sequence_number += 721);
+            governance::execute(&env, id); // → Executed
+            governance::cancel(&env, &s1, id); // AlreadyExecuted = 6
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #5)")]
+    fn test_cannot_cancel_twice() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let a = Address::generate(&env);
+        let b = Address::generate(&env);
+        let cid = init_two(&env, &a, &b);
+
+        env.as_contract(&cid, || {
+            let id = governance::propose(&env, make_proposal(&env, 1, &a));
+            governance::cancel(&env, &a, id); // → Cancelled
+            governance::cancel(&env, &b, id); // InvalidStateTransition = 5
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")]
+    fn test_non_signer_cannot_cancel() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let a = Address::generate(&env);
+        let outsider = Address::generate(&env);
+        let cid = init_two(&env, &a, &Address::generate(&env));
+
+        env.as_contract(&cid, || {
+            let id = governance::propose(&env, make_proposal(&env, 1, &a));
+            governance::cancel(&env, &outsider, id); // NotASigner = 1
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #5)")]
+    fn test_cannot_approve_cancelled_proposal() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let a = Address::generate(&env);
+        let b = Address::generate(&env);
+        let cid = init_two(&env, &a, &b);
+
+        env.as_contract(&cid, || {
+            let id = governance::propose(&env, make_proposal(&env, 1, &a));
+            governance::cancel(&env, &a, id); // → Cancelled
+            governance::approve(&env, &b, id); // InvalidStateTransition = 5
+        });
+    }
 }
