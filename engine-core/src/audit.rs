@@ -4,7 +4,8 @@
 //! Off-chain provers submit `StateCommitment`s; this module verifies ordering
 //! and hash integrity before they are persisted.
 
-use soroban_sdk::{contracttype, panic_with_error, symbol_short, Env, Symbol};
+use soroban_sdk::{contracterror, panic_with_error, symbol_short, Env, Symbol, BytesN, Map, Val};
+use crate::event_utils::publish_event;
 use sha2::{Digest, Sha256};
 
 use crate::types::StateCommitment;
@@ -12,7 +13,7 @@ use crate::types::StateCommitment;
 const KEY_SEQ:  Symbol = symbol_short!("SEQ");
 const KEY_PREV: Symbol = symbol_short!("PREV_H");
 
-#[contracttype]
+#[contracterror]
 #[derive(Copy, Clone)]
 pub enum AuditError {
     ReplayedSequence  = 1,
@@ -59,12 +60,23 @@ pub fn validate_transition(env: &Env, commitment: &StateCommitment, payload: &[u
         (symbol_short!("AUDIT"), symbol_short!("commit")),
         (commitment.sequence, commitment.state_hash.clone()),
     );
+    // Emit structured Event for audit logs
+    let mut payload = Map::new(env);
+    payload.set(Symbol::short("seq"), commitment.sequence.into());
+    payload.set(Symbol::short("hash"), commitment.state_hash.clone().into());
+    publish_event(env, BytesN::from_array(env, &[0u8; 32]), BytesN::from_array(env, &[0u8; 32]), payload);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use soroban_sdk::{testutils::Address as _, Address, BytesN, Env};
+
+    #[soroban_sdk::contract]
+    pub struct TestContract;
+
+    #[soroban_sdk::contractimpl]
+    impl TestContract {}
 
     #[test]
     fn valid_first_commitment() {
@@ -78,7 +90,10 @@ mod tests {
             ledger:     100,
             author:     Address::generate(&env),
         };
-        validate_transition(&env, &c, payload); // must not panic
+        let contract_id = env.register_contract(None, TestContract);
+        env.as_contract(&contract_id, || {
+            validate_transition(&env, &c, payload); // must not panic
+        });
     }
 
     #[test]
@@ -93,7 +108,10 @@ mod tests {
             ledger:     100,
             author:     Address::generate(&env),
         };
-        validate_transition(&env, &c, payload);
-        validate_transition(&env, &c, payload); // second call must panic
+        let contract_id = env.register_contract(None, TestContract);
+        env.as_contract(&contract_id, || {
+            validate_transition(&env, &c, payload);
+            validate_transition(&env, &c, payload); // second call must panic
+        });
     }
 }

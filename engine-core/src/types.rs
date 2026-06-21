@@ -1,34 +1,47 @@
-use soroban_sdk::{contracttype, Address, BytesN};
+use soroban_sdk::{contracttype, contracterror};
 
-/// Canonical state snapshot committed to a ZK audit cycle.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct StateCommitment {
-    /// SHA-256 of serialised state payload (32 bytes).
-    pub state_hash: BytesN<32>,
-    /// Sequence number — monotonically increasing, prevents replay.
-    pub sequence:   u64,
-    /// Ledger at which this commitment was recorded.
-    pub ledger:     u32,
-    /// Signer that produced this commitment.
-    pub author:     Address,
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub enum TreasuryError {
+    InvalidBalance = 1,
 }
 
-/// Governance proposal passed to multi-sig hooks.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct Proposal {
-    pub id:          u64,
-    pub action_hash: BytesN<32>,
-    pub proposer:    Address,
-    pub approved_by: soroban_sdk::Vec<Address>,
-    pub executed:    bool,
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub enum BurnError {
+    ZeroAddress = 1,
 }
 
-/// Circuit-breaker state persisted in contract storage.
 #[contracttype]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ProposalState {
+    Pending = 0,
+    Approved = 1,
+    Executed = 2,
+    Expired = 3,
+}
+
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BreakerState {
-    Closed,  // normal operation
-    Open,    // halted — no state transitions allowed
+    Closed = 0,
+    Open = 1,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StateCommitment {
+    pub sequence: u64,
+    pub state_hash: soroban_sdk::BytesN<32>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Proposal {
+    pub id: u64,
+    pub proposer: soroban_sdk::Address,
+    pub action_hash: soroban_sdk::BytesN<32>,
+    pub approved_by: soroban_sdk::Vec<soroban_sdk::Address>,
+    pub state: u32, 
+    pub voting_deadline: u32, // Absolute ledger sequence where voting window closes
 }
