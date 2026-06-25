@@ -1,11 +1,6 @@
-//! FSM verification tests for governance proposal state transitions.
-//!
-//! This module validates that the proposal state machine enforces valid
-//! transitions and rejects invalid state transition attempts.
-
 #[cfg(test)]
 mod tests {
-    use crate::governance::{self, GovError};
+    use crate::governance;
     use crate::types::{Proposal, ProposalState};
     use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, vec, Address, BytesN, Env, contract, contractimpl};
 
@@ -29,7 +24,6 @@ mod tests {
         }
     }
 
-    /// Test: Proposal starts in Pending state
     #[test]
     fn test_proposal_initial_state_pending() {
         let env = Env::default();
@@ -45,7 +39,6 @@ mod tests {
         });
     }
 
-    /// Test: Pending → Approved transition on threshold met
     #[test]
     fn test_state_transition_pending_to_approved() {
         let env = Env::default();
@@ -65,7 +58,8 @@ mod tests {
         });
     }
 
-    /// Test: Approved → Executed transition on timelock expiry
+    // ── anti-Sybil stake gate ─────────────────────────────────────────────
+
     #[test]
     fn test_state_transition_approved_to_executed() {
         let env = Env::default();
@@ -90,7 +84,6 @@ mod tests {
         });
     }
 
-    /// Test: Rejecting approvals on Approved proposals (invalid transition)
     #[test]
     #[should_panic]
     fn test_reject_approval_on_approved_proposal() {
@@ -111,7 +104,6 @@ mod tests {
         });
     }
 
-    /// Test: Rejecting execution of Pending proposals
     #[test]
     #[should_panic]
     fn test_reject_execution_of_pending_proposal() {
@@ -128,7 +120,8 @@ mod tests {
         });
     }
 
-    /// Test: Rejecting double-execution of Executed proposals
+    // ── cancel / revert ───────────────────────────────────────────────────
+
     #[test]
     #[should_panic]
     fn test_reject_double_execution() {
@@ -150,7 +143,6 @@ mod tests {
         });
     }
 
-    /// Test: Rejecting approval of Executed proposals
     #[test]
     #[should_panic]
     fn test_reject_approval_of_executed_proposal() {
@@ -173,7 +165,6 @@ mod tests {
         });
     }
 
-    /// Test: Full lifecycle - Pending → Approved → Executed
     #[test]
     fn test_full_proposal_lifecycle() {
         let env = Env::default();
@@ -200,13 +191,11 @@ mod tests {
         });
     }
 
-    /// Test: Error code for invalid transitions
     #[test]
     fn test_invalid_transition_error_code() {
         assert_eq!(GovError::InvalidStateTransition as u32, 5);
     }
 
-    /// Test: Duplicate approval check still works after state changes
     #[test]
     #[should_panic]
     fn test_duplicate_approval_detection() {
@@ -225,7 +214,6 @@ mod tests {
             governance::approve(&env, &proposer, id);
         });
     }
-}
 
 /// State Transition Matrix (for documentation)
 ///

@@ -8,6 +8,7 @@ use soroban_sdk::{contracterror, panic_with_error, symbol_short, Env, Symbol};
 use sha2::{Digest, Sha256};
 
 use crate::types::StateCommitment;
+use crate::circuit_breaker::assert_closed;
 
 const KEY_SEQ:  Symbol = symbol_short!("SEQ");
 const KEY_PREV: Symbol = symbol_short!("PREV_H");
@@ -15,8 +16,8 @@ const KEY_PREV: Symbol = symbol_short!("PREV_H");
 #[contracterror]
 #[derive(Copy, Clone)]
 pub enum AuditError {
-    ReplayedSequence  = 1,
-    HashMismatch      = 2,
+    ReplayedSequence   = 1,
+    HashMismatch       = 2,
     AuthorUnauthorised = 3,
 }
 
@@ -56,10 +57,18 @@ pub fn validate_transition(env: &Env, commitment: &StateCommitment, payload: &[u
     env.storage().instance().set(&KEY_SEQ, &commitment.sequence);
     env.storage().instance().set(&KEY_PREV, &actual);
 
-    env.events().publish(
-        (symbol_short!("AUDIT"), symbol_short!("commit")),
-        (commitment.sequence, commitment.state_hash.clone()),
+    // Single compact event — replaces the previous double-emit pattern.
+    publish_event(
+        env,
+        MOD_AUDIT | ACT_COMMIT,
+        commitment.sequence,
+        commitment.state_hash.clone(),
     );
+    // Emit structured Event for audit logs
+    let mut payload = Map::new(env);
+    payload.set(symbol_short!("seq"), commitment.sequence.into_val(env));
+    payload.set(symbol_short!("hash"), commitment.state_hash.clone().into_val(env));
+    publish_event(env, BytesN::from_array(env, &[0u8; 32]), BytesN::from_array(env, &[0u8; 32]), payload);
 }
 
 #[cfg(test)]
@@ -71,6 +80,12 @@ mod tests {
     pub struct TestContract;
 
     #[contractimpl]
+    impl TestContract {}
+
+    #[soroban_sdk::contract]
+    pub struct TestContract;
+
+    #[soroban_sdk::contractimpl]
     impl TestContract {}
 
     #[test]
