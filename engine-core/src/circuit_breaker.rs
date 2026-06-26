@@ -40,6 +40,7 @@ pub fn assert_closed(env: &Env) {
 }
 
 pub fn trip(env: &Env, guardian: &Address) {
+    crate::non_reentrant!(env);
     guardian.require_auth();
     require_guardian(env, guardian);
     set_state(env, BreakerState::Open);
@@ -56,6 +57,7 @@ pub fn trip(env: &Env, guardian: &Address) {
 }
 
 pub fn reset(env: &Env, guardian: &Address) {
+    crate::non_reentrant!(env);
     guardian.require_auth();
     require_guardian(env, guardian);
     set_state(env, BreakerState::Closed);
@@ -102,7 +104,13 @@ mod tests {
     struct TestContract;
 
     use super::*;
-    use soroban_sdk::{testutils::Address as _, vec, Env};
+    use soroban_sdk::{testutils::Address as _, contract, contractimpl, vec, Env};
+
+    #[contract]
+    pub struct TestContract;
+
+    #[contractimpl]
+    impl TestContract {}
 
     #[soroban_sdk::contract]
     pub struct TestContract;
@@ -113,20 +121,23 @@ mod tests {
     #[test]
     fn trip_and_reset() {
         let env = Env::default();
-        env.mock_all_auths();
-        let g = Address::generate(&env);
-        let h = Address::generate(&env);
         let contract_id = env.register_contract(None, TestContract);
-        env.as_contract(&contract_id, || {
-            init(&env, vec![&env, g.clone(), h.clone()]);
+        let g = Address::generate(&env);
 
+        env.as_contract(&contract_id, || {
+            init(&env, vec![&env, g.clone()]);
             assert_closed(&env); // should not panic
+        });
+
+        env.mock_all_auths();
+        env.as_contract(&contract_id, || {
             trip(&env, &g);
 
             let state: BreakerState = env.storage().instance().get(&KEY_STATE).unwrap();
             assert_eq!(state, BreakerState::Open);
-
-            reset(&env, &h);
+        });
+        env.as_contract(&contract_id, || {
+            reset(&env, &g);
             assert_closed(&env); // back to closed — no panic
         });
     }
@@ -136,10 +147,10 @@ mod tests {
     fn non_guardian_cannot_trip() {
         let env = Env::default();
         env.mock_all_auths();
-        let g = Address::generate(&env);
-        let rogue = Address::generate(&env);
         let contract_id = env.register_contract(None, TestContract);
         env.as_contract(&contract_id, || {
+            let g = Address::generate(&env);
+            let rogue = Address::generate(&env);
             init(&env, vec![&env, g.clone()]);
             trip(&env, &rogue);
         });

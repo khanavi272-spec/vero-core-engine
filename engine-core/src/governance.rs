@@ -58,13 +58,7 @@ pub enum GovError {
 
 /// Initialise governance with an ordered signer set and approval threshold.
 pub fn init(env: &Env, signers: Vec<Address>, threshold: u32) {
-    assert!(threshold > 0, "threshold must be non-zero");
-    assert!(threshold <= signers.len(), "threshold > signer count");
-    let mut seen = Vec::new(env);
-    for signer in signers.iter() {
-        assert!(!seen.contains(&signer), "duplicate signer");
-        seen.push_back(signer);
-    }
+    assert!(threshold <= (signers.len() as u32), "threshold > signer count");
     env.storage().instance().set(&KEY_SIGNERS, &signers);
     env.storage().instance().set(&KEY_THRESH, &threshold);
     let empty: Map<u64, (Proposal, u32)> = Map::new(env);
@@ -135,12 +129,9 @@ pub fn propose(env: &Env, proposal: Proposal) -> u64 {
 /// Record a signer's approval for `proposal_id`.
 /// Transitions state from Pending → Approved when threshold is met.
 pub fn approve(env: &Env, signer: &Address, proposal_id: u64) {
+    crate::non_reentrant!(env);
     signer.require_auth();
-    let signers: Vec<Address> = env
-        .storage()
-        .instance()
-        .get(&KEY_SIGNERS)
-        .unwrap_or(vec![env]);
+    let signers: Vec<Address> = env.storage().instance().get(&KEY_SIGNERS).unwrap_or(vec![env]);
     if !signers.contains(signer) {
         panic_with_error!(env, GovError::NotASigner);
     }
@@ -163,54 +154,24 @@ pub fn approve(env: &Env, signer: &Address, proposal_id: u64) {
     }
     prop.approved_by.push_back(signer.clone());
 
-    // Transition to Approved when threshold is met
-    if prop.approved_by.len() >= threshold {
-        prop.state = ProposalState::Approved;
+    if min_stake > 0 {
+        let balance = token::Client::new(env, &stake_token).balance(voter);
+        if balance < min_stake {
+            panic_with_error!(env, GovError::InsufficientStake);
+        }
+        // Initialize state to Pending
+        proposal.state = ProposalState::Pending;
+
+        let mut props = load_proposals(env);
+        let unlock_ledger = env.ledger().sequence() + TIMELOCK_LEDGERS;
+        props.set(proposal.id, (proposal.clone(), unlock_ledger));
+        env.storage().instance().set(&KEY_PROPOSALS, &props);
         env.events().publish(
-            (symbol_short!("GOV"), symbol_short!("approved")),
-    prop.approved_by.push_back(voter.clone());
-
-    // Audit log: record every vote, not only the one that meets threshold.
-    // Topics carry the voter so logs can be filtered per address; the data and
-    // structured payload carry the proposal id and the running approval tally.
-    let votes_cast = prop.approved_by.len();
-
-    env.events().publish(
-        (symbol_short!("GOV"), symbol_short!("vote"), voter.clone()),
-        (proposal_id, votes_cast),
-    );
-
-    let mut vote_payload = Map::new(env);
-    vote_payload.set(Symbol::short("proposal_id"), proposal_id.into());
-    vote_payload.set(Symbol::short("voter"), voter.clone().into_val(env));
-    vote_payload.set(Symbol::short("votes"), votes_cast.into());
-    publish_event(
-        env,
-        BytesN::from_array(env, &[0u8; 32]),
-        BytesN::from_array(env, &[0u8; 32]),
-        vote_payload,
-    );
-
-    let threshold: u32 = env.storage().instance().get(&KEY_THRESH).unwrap_or(1);
-
-    if prop.approved_by.len() >= threshold {
-        prop.state = ProposalState::Approved;
-
-        // Single compact event for approval.
-        publish_event(
-            env,
-            MOD_GOV | ACT_APPROVE,
-            proposal_id,
-            BytesN::from_array(env, &[0u8; 32]),
+            (symbol_short!("GOV"), symbol_short!("propose")),
+            proposal.id,
         );
-        let mut payload = Map::new(env);
-        payload.set(Symbol::new(env, "proposal_id"), proposal_id.into_val(env));
-        publish_event(
-            env,
-            BytesN::from_array(env, &[0u8; 32]),
-            BytesN::from_array(env, &[0u8; 32]),
-            payload,
-        );
+        proposal.id
+    })
     }
 
     props.set(proposal_id, (prop, unlock));
@@ -226,21 +187,21 @@ pub fn approve(env: &Env, signer: &Address, proposal_id: u64) {
     }
 }
 
-/// Return a stored proposal by id.
-pub fn get_proposal(env: &Env, proposal_id: u64) -> Proposal {
-    let props = load_proposals(env);
-    let (prop, _) = props
-        .get(proposal_id)
-        .unwrap_or_else(|| panic_with_error!(env, GovError::ProposalNotFound));
-    prop
-}
-
-/// Execute a proposal after threshold approvals and time-lock expiry.
-/// Transitions state from Approved → Executed.
 pub fn execute(env: &Env, proposal_id: u64) -> Proposal {
+    crate::non_reentrant!(env);
     let mut props = load_proposals(env);
-    let (mut prop, unlock) = props
-        .get(proposal_id)
+    let (mut prop, unlock) = props.get(proposal_id).unwrap_or_else(|| {
+        panic_with_error!(env, GovError::ProposalNotFound)
+    });
+
+    if prop.state != ProposalState::Approved {
+        panic_with_error!(env, GovError::InvalidStateTransition);
+    }
+    let key = proposal_key(env, proposal_id);
+    let (mut prop, unlock): (Proposal, u32) = env
+        .storage()
+        .persistent()
+        .get(&key)
         .unwrap_or_else(|| panic_with_error!(env, GovError::ProposalNotFound));
 
     // Only approved proposals can be executed
@@ -270,52 +231,73 @@ pub fn execute(env: &Env, proposal_id: u64) -> Proposal {
     prop
 }
 
-/// Cancel (roll back) a proposal that has not yet been executed.
-///
-/// Reverts the proposal to the terminal `Cancelled` state so it can no longer
-/// be approved or executed. Only a governance signer may cancel, and only while
-/// the proposal is still in a non-terminal state — an already executed proposal
-/// cannot be undone, and an already cancelled proposal cannot be cancelled again.
-pub fn cancel(env: &Env, caller: &Address, proposal_id: u64) -> Proposal {
-    caller.require_auth();
-    require_signer(env, caller);
+/// Record a signer's approval for `proposal_id`.
+/// Transitions state from Pending → Approved when threshold is met.
+pub fn approve(env: &Env, signer: &Address, proposal_id: u64) {
+    crate::non_reentrant!(env, {
+        signer.require_auth();
+        let signers: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&KEY_SIGNERS)
+            .unwrap_or(vec![env]);
+        if !signers.contains(signer) {
+            panic_with_error!(env, GovError::NotASigner);
+        }
+        let threshold: u32 = env.storage().instance().get(&KEY_THRESH).unwrap_or(1);
 
-    let key = proposal_key(env, proposal_id);
-    let (mut prop, unlock): (Proposal, u32) = env
-        .storage()
-        .persistent()
-        .get(&key)
-        .unwrap_or_else(|| panic_with_error!(env, GovError::ProposalNotFound));
+        let mut props = load_proposals(env);
+        let (mut prop, unlock) = props
+            .get(proposal_id)
+            .unwrap_or_else(|| panic_with_error!(env, GovError::ProposalNotFound));
 
-    // An executed proposal is terminal and cannot be rolled back.
-    if prop.state == ProposalState::Executed {
-        panic_with_error!(env, GovError::AlreadyExecuted);
-    }
+        // Only pending proposals can receive approvals
+        if prop.state != ProposalState::Pending {
+            panic_with_error!(env, GovError::InvalidStateTransition);
+        }
 
-    // Reject any other invalid transition (e.g. cancelling an already
-    // cancelled proposal).
-    if prop.state == ProposalState::Cancelled {
-        panic_with_error!(env, GovError::InvalidStateTransition);
-    }
+        if prop.approved_by.contains(signer) {
+            panic_with_error!(env, GovError::AlreadyApproved);
+        }
+        prop.approved_by.push_back(signer.clone());
 
-    prop.state = ProposalState::Cancelled;
-    env.storage().persistent().set(&key, &(prop.clone(), unlock));
-    extend_proposal_ttl(env, &key);
+        // Transition to Approved when threshold is met
+        if (prop.approved_by.len() as u32) >= threshold {
+            prop.state = ProposalState::Approved;
+            env.events().publish(
+                (symbol_short!("GOV"), symbol_short!("approved")),
+                proposal_id,
+            );
+        }
 
-    env.events().publish(
-        (symbol_short!("GOV"), symbol_short!("cancel")),
-        proposal_id,
-    );
-    let mut payload = Map::new(env);
-    payload.set(Symbol::new(env, "proposal_id"), proposal_id.into_val(env));
+        props.set(proposal_id, (prop, unlock));
+        env.storage().instance().set(&KEY_PROPOSALS, &props);
+    });
+}
 
-    let mut payload = Map::new(env);
-    payload.set(Symbol::short("proposal_id"), proposal_id.into());
-    publish_event(
-        env,
-        BytesN::from_array(env, &[0u8; 32]),
-        BytesN::from_array(env, &[0u8; 32]),
-        payload,
-    );
-    prop
+pub fn execute(env: &Env, proposal_id: u64) -> Proposal {
+    crate::non_reentrant!(env, {
+        let mut props = load_proposals(env);
+        let (mut prop, unlock) = props
+            .get(proposal_id)
+            .unwrap_or_else(|| panic_with_error!(env, GovError::ProposalNotFound));
+
+        // Only approved proposals can be executed
+        if prop.state != ProposalState::Approved {
+            panic_with_error!(env, GovError::InvalidStateTransition);
+        }
+
+        if env.ledger().sequence() < unlock {
+            panic_with_error!(env, GovError::TimelockActive);
+        }
+
+        prop.state = ProposalState::Executed;
+        props.set(proposal_id, (prop.clone(), unlock));
+        env.storage().instance().set(&KEY_PROPOSALS, &props);
+        env.events().publish(
+            (symbol_short!("GOV"), symbol_short!("execute")),
+            proposal_id,
+        );
+        prop
+    })
 }
