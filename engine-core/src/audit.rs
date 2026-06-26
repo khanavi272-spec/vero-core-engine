@@ -14,7 +14,7 @@ const KEY_SEQ: Symbol = symbol_short!("SEQ");
 const KEY_PREV: Symbol = symbol_short!("PREV_H");
 
 #[contracterror]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum AuditError {
     ReplayedSequence = 1,
     HashMismatch = 2,
@@ -73,6 +73,11 @@ pub fn validate_transition(env: &Env, commitment: &StateCommitment, payload: &[u
 
 #[cfg(test)]
 mod tests {
+    use soroban_sdk::contract;
+
+    #[contract]
+    struct TestContract;
+
     use super::*;
     use soroban_sdk::{testutils::Address as _, contract, contractimpl, Address, BytesN, Env};
 

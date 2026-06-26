@@ -14,7 +14,7 @@ const KEY_STATE: Symbol = symbol_short!("CB_STATE");
 const KEY_GUARDIAN: Symbol = symbol_short!("CB_GUARD");
 
 #[contracterror]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum BreakerError {
     CircuitOpen = 1,
     NotGuardian = 2,
@@ -22,12 +22,10 @@ pub enum BreakerError {
 }
 
 pub fn init(env: &Env, guardians: Vec<Address>) {
-    crate::non_reentrant!(env, {
-        env.storage()
-            .instance()
-            .set(&KEY_STATE, &BreakerState::Closed);
-        env.storage().instance().set(&KEY_GUARDIAN, &guardians);
-    });
+    env.storage()
+        .instance()
+        .set(&KEY_STATE, &BreakerState::Closed);
+    env.storage().instance().set(&KEY_GUARDIAN, &guardians);
 }
 
 pub fn assert_closed(env: &Env) {
@@ -100,6 +98,11 @@ fn require_guardian(env: &Env, caller: &Address) {
 
 #[cfg(test)]
 mod tests {
+    use soroban_sdk::contract;
+
+    #[contract]
+    struct TestContract;
+
     use super::*;
     use soroban_sdk::{testutils::Address as _, contract, contractimpl, vec, Env};
 
@@ -129,6 +132,7 @@ mod tests {
         env.mock_all_auths();
         env.as_contract(&contract_id, || {
             trip(&env, &g);
+
             let state: BreakerState = env.storage().instance().get(&KEY_STATE).unwrap();
             assert_eq!(state, BreakerState::Open);
         });

@@ -46,7 +46,7 @@ pub enum GovError {
 }
 
 #[contracterror]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum GovError {
     NotASigner = 1,
     AlreadyApproved = 2,
@@ -65,26 +65,65 @@ pub fn init(env: &Env, signers: Vec<Address>, threshold: u32) {
     env.storage().instance().set(&KEY_PROPOSALS, &empty);
 }
 
-pub fn load_proposals(env: &Env) -> Map<u64, (Proposal, u32)> {
-    env.storage().instance().get(&KEY_PROPOSALS).unwrap_or(Map::new(env))
+fn load_proposals(env: &Env) -> Map<u64, (Proposal, u32)> {
+    env.storage()
+        .instance()
+        .get(&KEY_PROPOSALS)
+        .unwrap_or(Map::new(env))
 }
 
 /// Submit a new proposal. Returns the assigned proposal id.
 pub fn propose(env: &Env, mut proposal: Proposal) -> u64 {
-    crate::non_reentrant!(env);
-    let signers: Vec<Address> = env.storage().instance().get(&KEY_SIGNERS).unwrap_or(vec![env]);
+    let signers: Vec<Address> = env
+        .storage()
+        .instance()
+        .get(&KEY_SIGNERS)
+        .unwrap_or(vec![env]);
     if !signers.contains(&proposal.proposer) {
         panic_with_error!(env, GovError::NotASigner);
     }
+    proposal.proposer.require_auth();
+    // Initialize state to Pending
+    proposal.state = ProposalState::Pending;
 
-    let current_ledger = env.ledger().sequence();
-    let voting_deadline = current_ledger + duration_ledgers;
+    let mut props = load_proposals(env);
+    let unlock_ledger = env.ledger().sequence() + TIMELOCK_LEDGERS;
+    props.set(proposal.id, (proposal.clone(), unlock_ledger));
+    env.storage().instance().set(&KEY_PROPOSALS, &props);
 
-    let mut props: Map<u64, (Proposal, u32)> = env
-        .storage()
-        .instance()
-        .get(&KEY_PROPOSALS)
-        .unwrap_or(Map::new(env))
+    env.events().publish(
+        (symbol_short!("GOV"), symbol_short!("propose")),
+        proposal.id,
+    );
+    let mut payload = Map::new(env);
+    payload.set(Symbol::new(env, "proposal_id"), proposal.id.into_val(env));
+    publish_event(
+        env,
+        BytesN::from_array(env, &[0u8; 32]),
+        BytesN::from_array(env, &[0u8; 32]),
+        payload,
+    );
+    proposal.id
+pub fn propose(env: &Env, proposal: Proposal) -> u64 {
+    let unlock_ledger = env.ledger().sequence() + TIMELOCK_LEDGERS;
+    let id = proposal.id;
+
+    let mut prop = proposal;
+    prop.state = ProposalState::Pending;
+
+    let key = proposal_key(env, id);
+    env.storage().persistent().set(&key, &(prop, unlock_ledger));
+    extend_proposal_ttl(env, &key);
+
+    // Single compact event.
+    publish_event(
+        env,
+        MOD_GOV | ACT_PROPOSE,
+        id,
+        BytesN::from_array(env, &[0u8; 32]),
+    );
+
+    id
 }
 
 /// Record a signer's approval for `proposal_id`.
@@ -100,29 +139,20 @@ pub fn approve(env: &Env, signer: &Address, proposal_id: u64) {
     let min_stake: i128 = env.storage().instance().get(&KEY_MIN_STAKE).unwrap_or(0);
     let stake_token: Address = env.storage().instance().get(&KEY_STAKE_TOK).unwrap();
 
-    let (mut prop, unlock) = props.get(proposal_id).unwrap_or_else(|| {
-        panic_with_error!(env, GovError::ProposalNotFound)
-    });
-
-    if prop.state != ProposalState::Pending {
-        panic_with_error!(env, GovError::InvalidStateTransition);
-    }
-    require_min_stake(env, voter);
-
-    let key = proposal_key(env, proposal_id);
-    let (mut prop, unlock): (Proposal, u32) = env
-        .storage()
-        .persistent()
-        .get(&key)
+    let mut props = load_proposals(env);
+    let (mut prop, unlock) = props
+        .get(proposal_id)
         .unwrap_or_else(|| panic_with_error!(env, GovError::ProposalNotFound));
 
+    // Only pending proposals can receive approvals
     if prop.state != ProposalState::Pending {
         panic_with_error!(env, GovError::InvalidStateTransition);
     }
 
-    if prop.approved_by.contains(voter) {
+    if prop.approved_by.contains(signer) {
         panic_with_error!(env, GovError::AlreadyApproved);
     }
+    prop.approved_by.push_back(signer.clone());
 
     if min_stake > 0 {
         let balance = token::Client::new(env, &stake_token).balance(voter);
@@ -144,7 +174,7 @@ pub fn approve(env: &Env, signer: &Address, proposal_id: u64) {
     })
     }
 
-    props.set(proposal_id, (prop.clone(), unlock));
+    props.set(proposal_id, (prop, unlock));
     env.storage().instance().set(&KEY_PROPOSALS, &props);
 
     }
@@ -174,6 +204,7 @@ pub fn execute(env: &Env, proposal_id: u64) -> Proposal {
         .get(&key)
         .unwrap_or_else(|| panic_with_error!(env, GovError::ProposalNotFound));
 
+    // Only approved proposals can be executed
     if prop.state != ProposalState::Approved {
         panic_with_error!(env, GovError::InvalidStateTransition);
     }
