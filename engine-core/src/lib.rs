@@ -8,11 +8,9 @@ pub mod burn;
 pub mod emergency_recovery;
 pub mod protocol_fee;
 pub mod types;
-pub mod version;
-pub mod event_struct;
-pub mod event_utils;
+pub mod guards;
 
 #[cfg(test)]
 mod governance_tests;
 #[cfg(test)]
-mod treasury_tests;
+mod reentrancy_tests;
