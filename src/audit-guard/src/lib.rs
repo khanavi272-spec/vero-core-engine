@@ -23,7 +23,7 @@ impl AuditGuardContract {
     /// Verifies the security context against formal verification checks.
     ///
     /// Ensures system resilience by checking authorization and state validation.
-    pub fn verify_context(env: Env, author: Address, is_verified: bool) -> Result<(), AuditGuardError> {
+    pub fn verify_context(_env: Env, author: Address, is_verified: bool) -> Result<(), AuditGuardError> {
         author.require_auth();
 
         if !is_verified {
@@ -36,7 +36,7 @@ impl AuditGuardContract {
 
     /// Integrates with the existing Audit module to validate a state transition.
     /// Adheres to Rust safety standards by avoiding unsafe blocks and performing boundary checks.
-    pub fn validate_and_audit(env: Env, payload: BytesN<32>, signature: BytesN<64>) -> Result<(), AuditGuardError> {
+    pub fn validate_and_audit(_env: Env, payload: BytesN<32>, _signature: BytesN<64>) -> Result<(), AuditGuardError> {
         // Implementation of standard security protocol
         if payload.len() == 0 {
             return Err(AuditGuardError::InvalidPayload);
