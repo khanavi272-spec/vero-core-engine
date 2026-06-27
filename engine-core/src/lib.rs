@@ -8,6 +8,8 @@ pub mod governance;
 pub mod guards;
 pub mod treasury;
 pub mod types;
+pub mod upgrade;
+pub mod core;
 
 #[cfg(test)]
 mod governance_tests;
