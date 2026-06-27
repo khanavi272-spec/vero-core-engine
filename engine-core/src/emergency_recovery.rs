@@ -185,7 +185,7 @@ mod tests {
         }
         let admins: Vec<Address> = (0..n)
             .map(|_| Address::generate(env))
-            .collect::<std::vec::Vec<_>>()
+            .collect::<alloc::vec::Vec<_>>()
             .iter()
             .fold(vec![env], |mut v, a| { v.push_back(a.clone()); v });
         env.as_contract(&contract_id, || init(env, admins.clone(), threshold));

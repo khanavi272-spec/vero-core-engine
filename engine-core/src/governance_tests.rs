@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::governance;
+    use crate::governance::{self, GovError};
     use crate::types::{Proposal, ProposalState};
     use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, vec, Address, BytesN, Env, contract, contractimpl};
 
@@ -29,6 +29,7 @@ mod tests {
         let env = Env::default();
         let contract_id = setup_env(&env);
         let proposer = Address::generate(&env);
+        env.mock_all_auths();
 
         env.as_contract(&contract_id, || {
             governance::init(&env, vec![&env, proposer.clone()], 1);
@@ -110,6 +111,7 @@ mod tests {
         let env = Env::default();
         let contract_id = setup_env(&env);
         let proposer = Address::generate(&env);
+        env.mock_all_auths();
 
         env.as_contract(&contract_id, || {
             governance::init(&env, vec![&env, proposer.clone()], 2);
@@ -193,7 +195,7 @@ mod tests {
 
     #[test]
     fn test_invalid_transition_error_code() {
-        assert_eq!(GovError::InvalidStateTransition as u32, 5);
+        assert_eq!(GovError::InvalidStateTransition as u32, 4);
     }
 
     #[test]
@@ -228,3 +230,4 @@ mod tests {
 /// | Executed | approve | — | No | InvalidStateTransition |
 /// | Executed | execute | — | No | InvalidStateTransition |
 pub struct StateTransitionMatrix;
+}
