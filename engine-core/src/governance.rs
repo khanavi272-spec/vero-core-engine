@@ -42,7 +42,6 @@ pub enum GovError {
     ArithmeticOverflow = 11,
 }
 
-/// Initialise governance with an ordered signer set and approval threshold.
 pub fn init(env: &Env, signers: Vec<Address>, threshold: u32) {
     init_internal(env, signers, threshold, None, 0);
 }
@@ -145,32 +144,15 @@ fn require_stake(env: &Env, signer: &Address) {
     }
 }
 
-/// Submit a proposal. The proposer must be a configured signer and must auth.
-pub fn propose(env: &Env, mut proposal: Proposal) -> u64 {
-    crate::non_reentrant!(env);
-    assert_closed(env);
-
-    proposal.proposer.require_auth();
-    require_signer(env, &proposal.proposer);
-
-    let mut proposals = load_proposals(env);
-    if proposals.contains_key(proposal.id) {
-        panic_with_error!(env, GovError::ProposalAlreadyExists);
-    }
-
-    // Canonicalise caller-provided state to the only valid initial state.
-    proposal.state = ProposalState::Pending;
-    proposal.approved_by = vec![env];
-
-    let id = proposal.id;
-    proposals.set(id, (proposal, 0));
-    save_proposals(env, &proposals);
-
-    publish_event(env, MOD_GOV | ACT_PROPOSE, id, zero_hash(env));
-    id
+    publish_event(
+        env,
+        MOD_GOV | ACT_PROPOSE,
+        proposal.id,
+        BytesN::from_array(env, &[0u8; 32]),
+    );
+    proposal.id
 }
 
-/// Record a signer's approval. Threshold approval starts the timelock.
 pub fn approve(env: &Env, signer: &Address, proposal_id: u64) {
     crate::non_reentrant!(env);
     assert_closed(env);
