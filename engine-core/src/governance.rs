@@ -40,6 +40,7 @@ pub enum GovError {
     AlreadyInitialized = 9,
     ProposalAlreadyExists = 10,
     ArithmeticOverflow = 11,
+    InvalidSignerOrder = 12,
 }
 
 pub fn init(env: &Env, signers: Vec<Address>, threshold: u32) {
@@ -128,6 +129,18 @@ fn require_signer(env: &Env, signer: &Address) {
     }
 }
 
+fn signer_index(env: &Env, signer: &Address) -> u32 {
+    let signers = load_signers(env);
+
+    for i in 0..signers.len() {
+        if signers.get(i).unwrap() == *signer {
+            return i;
+        }
+    }
+
+    panic_with_error!(env, GovError::NotASigner);
+}
+
 fn require_stake(env: &Env, signer: &Address) {
     let min_stake: i128 = env.storage().instance().get(&KEY_MIN_STAKE).unwrap_or(0);
     if min_stake == 0 {
@@ -191,8 +204,24 @@ pub fn approve(env: &Env, signer: &Address, proposal_id: u64) {
         panic_with_error!(env, GovError::InvalidStateTransition);
     }
     if proposal.approved_by.contains(signer) {
-        panic_with_error!(env, GovError::AlreadyApproved);
+    panic_with_error!(env, GovError::AlreadyApproved);
+}
+
+if proposal.approved_by.len() > 0 {
+    let last_signer = proposal
+        .approved_by
+        .get(proposal.approved_by.len() - 1)
+        .unwrap();
+
+    let last_index = signer_index(env, &last_signer);
+    let current_index = signer_index(env, signer);
+
+    if current_index <= last_index {
+        panic_with_error!(env, GovError::InvalidSignerOrder);
     }
+}
+
+proposal.approved_by.push_back(signer.clone());
     proposal.approved_by.push_back(signer.clone());
 
     let approval_threshold = threshold(env);
