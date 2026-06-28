@@ -154,6 +154,7 @@ fn require_stake(env: &Env, signer: &Address) {
 }
 
 pub fn approve(env: &Env, signer: &Address, proposal_id: u64) {
+    crate::circuit_breaker::assert_closed(env);
     crate::non_reentrant!(env);
     assert_closed(env);
 
@@ -196,6 +197,7 @@ pub fn approve(env: &Env, signer: &Address, proposal_id: u64) {
 
 /// Execute an approved proposal after its timelock has elapsed.
 pub fn execute(env: &Env, proposal_id: u64) -> Proposal {
+    crate::circuit_breaker::assert_closed(env);
     crate::non_reentrant!(env);
     assert_closed(env);
 
