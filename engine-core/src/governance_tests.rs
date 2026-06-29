@@ -2,10 +2,14 @@
 mod tests {
     use crate::governance::{self, GovError};
     use crate::types::{Proposal, ProposalState};
+
+    use soroban_sdk::{contract, contractimpl, testutils::Address as _, testutils::Ledger as _, vec, Address, BytesN, Env};
+
     use soroban_sdk::{
         testutils::{Address as _, Ledger as _},
         vec, Address, BytesN, Env,
     };
+
 
     #[soroban_sdk::contract]
     pub struct TestContract;
@@ -13,17 +17,13 @@ mod tests {
     #[soroban_sdk::contractimpl]
     impl TestContract {}
 
-    fn setup_env(env: &Env) -> Address {
-        env.register_contract(None, TestContract)
-    }
-
-    fn create_dummy_proposal(env: &Env, proposer: &Address) -> Proposal {
+    fn proposal(env: &Env, id: u64, proposer: Address) -> Proposal {
         Proposal {
-            id: 1,
-            action_hash: BytesN::from_array(env, &[0u8; 32]),
-            proposer: proposer.clone(),
+            id,
+            action_hash: BytesN::from_array(env, &[7u8; 32]),
+            proposer,
             approved_by: vec![env],
-            state: ProposalState::Pending,
+            state: ProposalState::Executed,
         }
     }
 
@@ -41,28 +41,49 @@ mod tests {
     }
 
     #[test]
-    fn test_proposal_initial_state_pending() {
+    fn proposal_initial_state_is_pending() {
         let env = Env::default();
         env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, TestContract);
+
         let contract_id = setup_env(&env);
+
         let proposer = Address::generate(&env);
         env.mock_all_auths();
 
         init_one_of_one(&env, &contract_id, &proposer);
         let id = propose_default(&env, &contract_id, &proposer);
         env.as_contract(&contract_id, || {
+
+            governance::init(&env, vec![&env, proposer.clone()], 1);
+            let id = governance::propose(&env, proposal(&env, 1, proposer));
+            assert_eq!(governance::get_proposal(&env, id).state, ProposalState::Pending);
+
             let (p, _) = governance::load_proposals(&env).get(id).unwrap();
             assert_eq!(p.state, ProposalState::Pending);
+
         });
     }
 
     #[test]
-    fn test_state_transition_pending_to_approved() {
+    fn pending_moves_to_approved_at_threshold() {
         let env = Env::default();
         env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, TestContract);
+
         let contract_id = setup_env(&env);
+
         let proposer = Address::generate(&env);
         let approver = Address::generate(&env);
+
+
+        env.as_contract(&contract_id, || {
+            governance::init(&env, vec![&env, proposer.clone()], 1);
+            let id = governance::propose(&env, proposal(&env, 1, proposer.clone()));
+            governance::approve(&env, &proposer, id);
+            assert_eq!(governance::get_proposal(&env, id).state, ProposalState::Approved);
 
         init_one_of_one(&env, &contract_id, &proposer);
         let id = propose_default(&env, &contract_id, &proposer);
@@ -71,16 +92,30 @@ mod tests {
             let (p, unlock) = governance::load_proposals(&env).get(id).unwrap();
             assert_eq!(p.state, ProposalState::Approved);
             assert_eq!(unlock, governance::TIMELOCK_LEDGERS);
+
         });
     }
 
     #[test]
-    fn test_state_transition_approved_to_executed() {
+    fn approved_moves_to_executed_after_timelock() {
         let env = Env::default();
         env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, TestContract);
+
         let contract_id = setup_env(&env);
+
         let proposer = Address::generate(&env);
         let approver = Address::generate(&env);
+
+
+        env.as_contract(&contract_id, || {
+            governance::init(&env, vec![&env, proposer.clone()], 1);
+            let id = governance::propose(&env, proposal(&env, 1, proposer.clone()));
+            governance::approve(&env, &proposer, id);
+            env.ledger().set_sequence_number(governance::TIMELOCK_LEDGERS + 1);
+            let executed = governance::execute(&env, id);
+            assert_eq!(executed.state, ProposalState::Executed);
 
         init_one_of_one(&env, &contract_id, &proposer);
         let id = propose_default(&env, &contract_id, &proposer);
@@ -91,14 +126,26 @@ mod tests {
             governance::execute(&env, id);
             let (p, _) = governance::load_proposals(&env).get(id).unwrap();
             assert_eq!(p.state, ProposalState::Executed);
+
         });
     }
 
     #[test]
     #[should_panic]
-    fn test_reject_approval_on_approved_proposal() {
+    fn double_approval_is_rejected() {
         let env = Env::default();
         env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, TestContract);
+        let proposer = Address::generate(&env);
+        let other = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            governance::init(&env, vec![&env, proposer.clone(), other], 2);
+            let id = governance::propose(&env, proposal(&env, 1, proposer.clone()));
+            governance::approve(&env, &proposer, id);
+            governance::approve(&env, &proposer, id);
+
         let contract_id = setup_env(&env);
         let proposer = Address::generate(&env);
         let approver = Address::generate(&env);
@@ -143,14 +190,18 @@ mod tests {
                 .set_sequence_number(governance::TIMELOCK_LEDGERS + 1);
             governance::execute(&env, id);
             governance::execute(&env, id);
+
         });
     }
 
     #[test]
     #[should_panic]
-    fn test_reject_approval_of_executed_proposal() {
+    fn timelock_blocks_early_execution() {
         let env = Env::default();
         env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, TestContract);
+
         let contract_id = setup_env(&env);
         let proposer = Address::generate(&env);
         let approver = Address::generate(&env);
@@ -174,8 +225,19 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
         let contract_id = setup_env(&env);
+
         let proposer = Address::generate(&env);
         let approver = Address::generate(&env);
+
+
+        env.as_contract(&contract_id, || {
+            governance::init(&env, vec![&env, proposer.clone()], 1);
+            let id = governance::propose(&env, proposal(&env, 1, proposer.clone()));
+            governance::approve(&env, &proposer, id);
+            governance::execute(&env, id);
+        });
+    }
+}
 
         init_one_of_one(&env, &contract_id, &proposer);
         let id = propose_default(&env, &contract_id, &proposer);
@@ -241,3 +303,4 @@ mod tests {
 #[allow(dead_code)]
 pub struct StateTransitionMatrix;
 }
+
