@@ -155,11 +155,22 @@ mod tests {
 
 
 
+
     #[test]
     fn trip_and_reset() {
         let env = Env::default();
         env.mock_all_auths();
         let contract_id = env.register_contract(None, TestContract);
+
+        let g = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            init(&env, vec![&env, g.clone()]);
+            assert_closed(&env);
+        });
+        env.mock_all_auths();
+        env.as_contract(&contract_id, || {
+            trip(&env, &g);
+
         let guardian = Address::generate(&env);
 
         env.as_contract(&contract_id, || {
@@ -176,8 +187,13 @@ mod tests {
         env.as_contract(&contract_id, || {
             trip(&env, &guardian);
             assert_eq!(state(&env), BreakerState::Open);
+
         });
+        env.mock_all_auths();
         env.as_contract(&contract_id, || {
+
+            reset(&env, &g);
+
             reset(&env, &guardian);
 
             assert_closed(&env);
@@ -188,8 +204,14 @@ mod tests {
     #[should_panic]
     fn non_guardian_cannot_trip() {
         let env = Env::default();
-        env.mock_all_auths();
+        env.mock_all_auths_allowing_non_root_auth();
         let contract_id = env.register_contract(None, TestContract);
+
+        let g = Address::generate(&env);
+        let rogue = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            init(&env, vec![&env, g]);
+
         let guardian = Address::generate(&env);
         let rogue = Address::generate(&env);
         env.as_contract(&contract_id, || {

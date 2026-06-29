@@ -96,6 +96,7 @@ mod tests {
         init_one_of_one(&env, &contract_id, &proposer);
         let id = propose_default(&env, &contract_id, &proposer);
         env.as_contract(&contract_id, || governance::approve(&env, &proposer, id));
+
         env.as_contract(&contract_id, || {
             let (p, unlock) = governance::load_proposals(&env).get(id).unwrap();
 
@@ -129,6 +130,7 @@ mod tests {
         init_one_of_one(&env, &contract_id, &proposer);
         let id = propose_default(&env, &contract_id, &proposer);
         env.as_contract(&contract_id, || governance::approve(&env, &proposer, id));
+
         env.as_contract(&contract_id, || {
             env.ledger()
                 .set_sequence_number(governance::TIMELOCK_LEDGERS + 1);
@@ -244,6 +246,7 @@ mod tests {
         init_one_of_one(&env, &contract_id, &proposer);
         let id = propose_default(&env, &contract_id, &proposer);
         env.as_contract(&contract_id, || governance::approve(&env, &proposer, id));
+
         env.as_contract(&contract_id, || {
             env.ledger()
                 .set_sequence_number(governance::TIMELOCK_LEDGERS + 1);
@@ -322,6 +325,7 @@ mod tests {
 
         init_one_of_one(&env, &contract_id, &proposer);
         let id = propose_default(&env, &contract_id, &proposer);
+
         env.as_contract(&contract_id, || {
             assert_eq!(
                 governance::get_proposal(&env, id).state,

@@ -6,6 +6,7 @@
 //! verify. The `flags` field packs a module id and action id into one `u32`.
 
 //! Compact event encoding for audit-ready Soroban logs.
+
 //!
 //! `CompactEvent` keeps on-chain events small and deterministic while still
 //! giving the relayer/dashboard enough data to reconstruct the control-plane
@@ -87,6 +88,9 @@ pub struct CompactEvent {
     pub flags: u32,
     /// Primary numeric value — sequence number, proposal id, amount, etc.
     pub value: u64,
+
+    /// Optional 32-byte hash (state_hash, action_hash). All-zero when unused.
+
     /// Optional 32-byte hash (all-zero when unused).
 
     pub hash: BytesN<32>,
