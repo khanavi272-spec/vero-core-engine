@@ -49,6 +49,7 @@ const RESERVED_KEYS: &[Symbol] = &[
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
 pub enum ControlPlaneError {
     AlreadyInitialized = 1,
     Unauthorized = 2,

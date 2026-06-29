@@ -27,6 +27,24 @@ fn initialized_client(env: &Env) -> (ControlPlaneClient<'_>, Address, Address) {
     (client, admin, contract_id)
 }
 
+fn setup_client(env: &Env) -> (Address, ControlPlaneClient<'_>) {
+    let contract_id = env.register(ControlPlane, ());
+    let client = ControlPlaneClient::new(env, &contract_id);
+    (contract_id, client)
+}
+
+fn make_commitment(env: &Env, admin: &Address, seq: u32) -> (StateCommitment, BytesN<32>) {
+    let payload = BytesN::from_array(env, &[seq as u8; 32]);
+    let hash = compute_commitment(&[0u8; 32], seq as u64, &payload.to_array());
+    let commitment = StateCommitment {
+        sequence: seq as u64,
+        state_hash: BytesN::from_array(env, &hash),
+        ledger: 100,
+        author: admin.clone(),
+    };
+    (commitment, payload)
+}
+
 #[test]
 fn test_initialize() {
     let env = Env::default();
@@ -41,6 +59,25 @@ fn test_initialize() {
     assert_eq!(client.get_admin(), admin);
 
     let res = client.try_initialize(&admin);
+    assert!(res.is_err());
+
+    // Version tracking is initialised
+    assert_eq!(client.contract_version(), CONTRACT_VERSION);
+    let (maj, min, pat) = client.version();
+    assert_eq!((maj, min, pat), (VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH));
+}
+
+#[test]
+#[should_panic(expected = "ZeroAddress")]
+fn test_initialize_zero_address_protection() {
+    let env = Env::default();
+    let (contract_id, client) = setup_client(&env);
+    // Trying to set the contract itself as admin should fail
+    let admin = Address::from_string(&"CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+        .parse()
+        .unwrap_or(contract_id.clone()));
+    // Simpler: use contract_id directly (Soroban allows this, our check catches it)
+    let res = client.try_initialize(&contract_id);
     assert!(res.is_err());
 }
 
