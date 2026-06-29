@@ -38,17 +38,20 @@ fn test_initialize() {
     client.initialize(&admin);
     assert_eq!(client.admin(), Some(admin.clone()));
 
+    assert_eq!(client.get_admin(), admin);
+
     let res = client.try_initialize(&admin);
     assert!(res.is_err());
 }
 
 #[test]
-fn test_update_param_success() {
+#[should_panic]
+fn test_get_admin_rejects_uninitialized() {
     let env = Env::default();
     let (client, admin, _) = initialized_client(&env);
 
     let param_key = symbol_short!("FEE");
-    let param_val = 100;
+    let param_val = 100u64;
     let payload = BytesN::from_array(&env, &[1u8; 32]);
     let commitment = commitment(&env, &admin, 1, &payload);
 

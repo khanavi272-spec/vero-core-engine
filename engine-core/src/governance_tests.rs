@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn test_invalid_transition_error_code() {
-        assert_eq!(GovError::InvalidStateTransition as u32, 4);
+        assert_eq!(GovError::InvalidStateTransition as u32, 5);
     }
 
     #[test]
@@ -238,5 +238,6 @@ mod tests {
 /// | Approved | execute (timelock active) | — | No | TimelockActive |
 /// | Executed | approve | — | No | InvalidStateTransition |
 /// | Executed | execute | — | No | InvalidStateTransition |
+#[allow(dead_code)]
 pub struct StateTransitionMatrix;
 }

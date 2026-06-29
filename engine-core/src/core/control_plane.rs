@@ -21,6 +21,32 @@ const KEY_INIT: Symbol = symbol_short!("CP_INIT");
 const KEY_PARAM_COUNT: Symbol = symbol_short!("P_COUNT");
 const KEY_LAST_PARAM: Symbol = symbol_short!("LASTPAR");
 
+/// Reserved keys that may not be modified through `update_param` to prevent
+/// accidental corruption of internal engine state.
+const RESERVED_KEYS: &[Symbol] = &[
+    symbol_short!("ADMIN"),
+    symbol_short!("SEQ"),
+    symbol_short!("PREV_H"),
+    symbol_short!("CB_STATE"),
+    symbol_short!("CB_GUARD"),
+    symbol_short!("PROPS"),
+    symbol_short!("SIGNERS"),
+    symbol_short!("THRESH"),
+    symbol_short!("MINSTAKE"),
+    symbol_short!("STKTOK"),
+    symbol_short!("ER_ADMINS"),
+    symbol_short!("ER_THRESH"),
+    symbol_short!("ER_APPRVS"),
+    symbol_short!("ER_DEST"),
+    symbol_short!("ER_TOKEN"),
+    symbol_short!("ER_AMOUNT"),
+    symbol_short!("FEE_BPS"),
+    symbol_short!("FEE_RCP"),
+    symbol_short!("SNAPC"),
+    symbol_short!("SNAPL"),
+    symbol_short!("OUTFLOWS"),
+];
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum ControlPlaneError {
@@ -82,6 +108,19 @@ impl ControlPlane {
     /// Pure preflight integrity check for clients and tests.
     pub fn integrity_check(env: Env, commitment: StateCommitment, payload: BytesN<32>) -> bool {
         audit::integrity_check(&env, &commitment, &payload.to_array())
+    }
+
+    /// Return the configured admin, or panic if not initialized.
+    pub fn get_admin(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&KEY_ADMIN)
+            .unwrap_or_else(|| panic_with_error!(&env, ControlPlaneError::NotInitialized))
+    }
+
+    /// Return a previously set protocol parameter, or `None`.
+    pub fn get_param(env: Env, param_key: Symbol) -> Option<u64> {
+        env.storage().instance().get(&param_key)
     }
 
     /// Mutate a protocol parameter securely.
@@ -204,4 +243,8 @@ fn increment_param_count(env: &Env) {
 fn publish_control_governance_event(env: &Env, proposal_id: u64, executed: bool, hash: BytesN<32>) {
     let action = if executed { ACT_EXECUTE } else { ACT_PROPOSE };
     publish_event(env, MOD_GOV | action, proposal_id, hash);
+}
+
+fn is_reserved_key(key: &Symbol) -> bool {
+    RESERVED_KEYS.iter().any(|reserved| reserved == key)
 }
